@@ -92,6 +92,11 @@ namespace Azure.Core.Pipeline
             _activityAdapter?.AddLink(traceparent, tracestate, attributes);
         }
 
+        public void SetDisplayName(string displayName)
+        {
+            _activityAdapter?.SetDisplayName(displayName);
+        }
+
         public void Start()
         {
             _activityAdapter?.Start();
@@ -168,6 +173,7 @@ namespace Azure.Core.Pipeline
             private ICollection<KeyValuePair<string,object>>? _tagCollection;
             private DateTimeOffset _startTime;
             private List<Activity>? _links;
+            private string? _displayName;
 
             public ActivityAdapter(object? activitySource, DiagnosticSource diagnosticSource, string activityName, ActivityKind kind, object? diagnosticSourceArgs)
             {
@@ -298,6 +304,11 @@ namespace Azure.Core.Pipeline
                     _currentActivity.Start();
                 }
 
+                if (_displayName != null)
+                {
+                    _currentActivity.SetDisplayName(_displayName);
+                }
+
                 _diagnosticSource.Write(_activityName + ".Start", _diagnosticSourceArgs ?? _currentActivity);
             }
 
@@ -316,6 +327,18 @@ namespace Azure.Core.Pipeline
             {
                 _startTime = startTime;
                 _currentActivity?.SetStartTime(startTime);
+            }
+
+            public void SetDisplayName(string displayName)
+            {
+                if (_currentActivity == null)
+                {
+                    _displayName = displayName;
+                }
+                else
+                {
+                    _currentActivity?.SetDisplayName(displayName);
+                }
             }
 
             public void MarkFailed(Exception exception)
@@ -368,6 +391,7 @@ namespace Azure.Core.Pipeline
         private static Action<Activity, string, object?>? ActivityAddTagMethod;
         private static Func<object, string, int, ICollection<KeyValuePair<string, object>>?, IList?, DateTimeOffset, Activity?>? ActivitySourceStartActivityMethod;
         private static Func<object, bool>? ActivitySourceHasListenersMethod;
+        private static Action<Activity, string>? ActivityDisplayNameSetter;
         private static Func<string, string?, ICollection<KeyValuePair<string, object>>?, object?>? CreateActivityLinkMethod;
         private static Func<ICollection<KeyValuePair<string,object>>?>? CreateTagsCollectionMethod;
 
@@ -618,6 +642,33 @@ namespace Azure.Core.Pipeline
             }
 
             return ActivitySourceStartActivityMethod.Invoke(activitySource, activityName, kind, tags, links, startTime);
+        }
+
+        public static void SetDisplayName(this Activity activity, string displayName)
+        {
+            if (activity == null)
+            {
+                return;
+            }
+
+            if (ActivityDisplayNameSetter == null)
+            {
+                var displayMethodSetter = typeof(Activity).GetProperty("DisplayName", BindingFlags.Instance | BindingFlags.Public)?.GetSetMethod();
+                if (displayMethodSetter == null)
+                {
+                    ActivityDisplayNameSetter = (_, _) => { };
+                }
+                else
+                {
+                    var activityParameter = Expression.Parameter(typeof(Activity));
+                    var displayNameParameter = Expression.Parameter(typeof(string));
+                    ActivityDisplayNameSetter = Expression.Lambda<Action<Activity, string>>(
+                           Expression.Call(ActivityParameter, displayMethodSetter, displayNameParameter),
+                           ActivityParameter, displayNameParameter).Compile();
+                }
+            }
+
+            ActivityDisplayNameSetter(activity, displayName);
         }
 
         public static object? CreateActivitySource(string name)

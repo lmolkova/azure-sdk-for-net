@@ -200,6 +200,8 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid
                 {
                     AddLinkIfEventHasContext(scope, eventToken);
                 }
+
+                scope.SetDisplayName(functionName);
             }
 
             scope.Start();

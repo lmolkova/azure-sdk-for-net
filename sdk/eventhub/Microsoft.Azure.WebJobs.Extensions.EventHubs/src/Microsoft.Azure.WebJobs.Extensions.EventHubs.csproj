@@ -22,6 +22,11 @@
   <ItemGroup>
     <Compile Include="$(AzureCoreSharedSources)Argument.cs" LinkBase="SharedSource" />
     <Compile Include="$(AzureCoreSharedSources)ConnectionString.cs" LinkBase="SharedSource" />
+
+	<Compile Include="$(AzureCoreSharedSources)AppContextSwitchHelper.cs" LinkBase="Shared" />
+	<Compile Include="$(AzureCoreSharedSources)DiagnosticScope.cs" LinkBase="Shared" />
+	<Compile Include="$(AzureCoreSharedSources)DiagnosticScopeFactory.cs" LinkBase="Shared" />
+
     <Compile Include="../../Azure.Messaging.EventHubs.Shared/src/Processor/StorageManager.cs" LinkBase="SharedSource" />
     <Compile Include="../../Azure.Messaging.EventHubs.Shared/src/Core/CancellationTokenExtensions.cs" LinkBase="SharedSource" />
     <Compile Include="../../Azure.Messaging.EventHubs.Shared/src/Core/BasicRetryPolicy.cs" LinkBase="SharedSource" />

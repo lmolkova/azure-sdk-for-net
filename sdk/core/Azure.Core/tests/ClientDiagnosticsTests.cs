@@ -243,5 +243,22 @@ namespace Azure.Core.Tests
 
             Assert.AreEqual(2, testListener.Sources.Count);
         }
+
+        [Test]
+        public void SetDisplayNameIsNoop()
+        {
+            using var testListener = new TestDiagnosticListener("Azure.Clients");
+            DiagnosticScopeFactory clientDiagnostics = new DiagnosticScopeFactory("Azure.Clients", null, true);
+
+            DiagnosticScope scope = clientDiagnostics.CreateScope("ActivityName");
+            scope.SetDisplayName("new name");
+            scope.Start();
+
+            Activity activity = Activity.Current;
+
+            scope.Dispose();
+
+            Assert.AreEqual("ActivityName", activity.OperationName);
+        }
     }
 }

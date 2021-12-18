@@ -165,8 +165,8 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid.Tests
             {
                 var executionScope = testListener.AssertAndRemoveScope("EventGrid.Process", new KeyValuePair<string, string>("az.namespace", "Microsoft.EventGrid"));
                 Assert.IsEmpty(executionScope.Links);
-                Assert.True(_log.TryGetValue(executionScope.Activity.Id, out var activityName));
-                Assert.AreEqual("EventGrid.Process", activityName);
+                Assert.True(_log.TryGetValue(executionScope.Activity.Id, out _));
+                ValidateActivityNames(executionScope.Activity, functionName);
             }
         }
 
@@ -193,8 +193,8 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid.Tests
 
             Assert.IsEmpty(executionScope.Links);
             Assert.Null(executionScope.Exception);
-            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out var activityName));
-            Assert.AreEqual("EventGrid.Process", activityName);
+            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out _));
+            ValidateActivityNames(executionScope.Activity, functionName);
         }
 
         [Test]
@@ -219,8 +219,8 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid.Tests
             var expectedLinks = new[] { new ClientDiagnosticListener.ProducedLink(traceparent) };
             Assert.That(executionScope.Links, Is.EquivalentTo(expectedLinks));
             Assert.Null(executionScope.Exception);
-            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out var activityName));
-            Assert.AreEqual("EventGrid.Process", activityName);
+            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out _));
+            ValidateActivityNames(executionScope.Activity, functionName);
         }
 
         [Test]
@@ -253,8 +253,8 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid.Tests
             {
                 var executionScope = testListener.AssertAndRemoveScope("EventGrid.Process", new KeyValuePair<string, string>("az.namespace", "Microsoft.EventGrid"));
                 Assert.AreEqual(1, executionScope.Links.Count);
-                Assert.True(_log.TryGetValue(executionScope.Activity.Id, out var activityName));
-                Assert.AreEqual("EventGrid.Process", activityName);
+                Assert.True(_log.TryGetValue(executionScope.Activity.Id, out _));
+                ValidateActivityNames(executionScope.Activity, functionName);
 
                 var link = executionScope.Links.Single();
                 if (link.Traceparent == traceparent1)
@@ -305,8 +305,8 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid.Tests
 
             Assert.That(executionScope.Links, Is.EquivalentTo(expectedLinks));
             Assert.Null(executionScope.Exception);
-            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out var activityName));
-            Assert.AreEqual("EventGrid.Process", activityName);
+            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out _));
+            ValidateActivityNames(executionScope.Activity, functionName);
         }
 
         [Test]
@@ -337,8 +337,8 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid.Tests
 
             Assert.That(executionScope.Links, Is.EquivalentTo(expectedLinks));
             Assert.NotNull(executionScope.Exception);
-            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out var activityName));
-            Assert.AreEqual("EventGrid.Process", activityName);
+            Assert.True(_log.TryGetValue(executionScope.Activity.Id, out _));
+            ValidateActivityNames(executionScope.Activity, functionName);
         }
 
         [Test]
@@ -423,6 +423,14 @@ namespace Microsoft.Azure.WebJobs.Extensions.EventGrid.Tests
             }
             request.Content = new StringContent(payloadArray.ToString(), Encoding.UTF8, "application/json");
             return request;
+        }
+
+        private static void ValidateActivityNames(Activity activity, string functionName)
+        {
+            Assert.AreEqual("EventGrid.Process", activity.OperationName);
+#if NET5_0_OR_GREATER
+            Assert.AreEqual(functionName, activity.DisplayName);
+#endif
         }
 
         public class FakePayload

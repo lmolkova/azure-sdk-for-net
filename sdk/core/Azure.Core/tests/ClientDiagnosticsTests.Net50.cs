@@ -181,6 +181,42 @@ namespace Azure.Core.Tests
 
             Assert.AreEqual(0, activityListener.Activities.Single().Links.Count());
         }
+
+        [Test]
+        public void CanSetDisplayNameAfterStart()
+        {
+            using var _ = SetAppConfigSwitch();
+
+            using var activityListener = new TestActivitySourceListener("Azure.Clients.ClientName");
+            DiagnosticScopeFactory clientDiagnostics = new DiagnosticScopeFactory("Azure.Clients", "Microsoft.Azure.Core.Cool.Tests", true);
+            DiagnosticScope scope = clientDiagnostics.CreateScope("ClientName.ActivityName");
+            scope.Start();
+            scope.SetDisplayName("new name");
+            scope.Dispose();
+
+            Assert.AreEqual(1, activityListener.Activities.Count);
+            var activity = activityListener.Activities.Dequeue();
+            Assert.AreEqual("new name", activity.DisplayName);
+            Assert.AreEqual("ClientName.ActivityName", activity.OperationName);
+        }
+
+        [Test]
+        public void CanSetDisplayNameBeforeStart()
+        {
+            using var _ = SetAppConfigSwitch();
+
+            using var activityListener = new TestActivitySourceListener("Azure.Clients.ClientName");
+            DiagnosticScopeFactory clientDiagnostics = new DiagnosticScopeFactory("Azure.Clients", "Microsoft.Azure.Core.Cool.Tests", true);
+            DiagnosticScope scope = clientDiagnostics.CreateScope("ClientName.ActivityName");
+            scope.SetDisplayName("new name");
+            scope.Start();
+            scope.Dispose();
+
+            Assert.AreEqual(1, activityListener.Activities.Count);
+            var activity = activityListener.Activities.Dequeue();
+            Assert.AreEqual("new name", activity.DisplayName);
+            Assert.AreEqual("ClientName.ActivityName", activity.OperationName);
+        }
     }
 #endif
 }

@@ -3,11 +3,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Azure.Core.Pipeline;
 using Azure.Messaging.EventHubs;
 using Azure.Messaging.EventHubs.Processor;
 using Microsoft.Azure.WebJobs.EventHubs.Processor;
@@ -31,6 +33,7 @@ namespace Microsoft.Azure.WebJobs.EventHubs.Listeners
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger _logger;
         private string _details;
+        private string _functionId;
 
         public EventHubListener(
             string functionId,
@@ -59,6 +62,7 @@ namespace Microsoft.Azure.WebJobs.EventHubs.Listeners
 
             _details = $"'namespace='{eventProcessorHost?.FullyQualifiedNamespace}', eventHub='{eventProcessorHost?.EventHubName}', " +
                 $"consumerGroup='{eventProcessorHost?.ConsumerGroup}', functionId='{functionId}', singleDispatch='{singleDispatch}'";
+            _functionId = functionId;
         }
 
         /// <summary>
@@ -90,7 +94,7 @@ namespace Microsoft.Azure.WebJobs.EventHubs.Listeners
 
         IEventProcessor IEventProcessorFactory.CreateEventProcessor()
         {
-            return new EventProcessor(_options, _executor, _loggerFactory.CreateLogger<EventProcessor>(), _singleDispatch);
+            return new EventProcessor(_options, _executor, _loggerFactory.CreateLogger<EventProcessor>(), _singleDispatch, _functionId);
         }
 
         public IScaleMonitor GetMonitor()
@@ -109,13 +113,15 @@ namespace Microsoft.Azure.WebJobs.EventHubs.Listeners
             private readonly int _batchCheckpointFrequency;
             private int _batchCounter;
             private bool _disposed;
+            private string _functionName;
 
-            public EventProcessor(EventHubOptions options, ITriggeredFunctionExecutor executor, ILogger logger, bool singleDispatch)
+            public EventProcessor(EventHubOptions options, ITriggeredFunctionExecutor executor, ILogger logger, bool singleDispatch, string functionName)
             {
                 _executor = executor;
                 _singleDispatch = singleDispatch;
                 _batchCheckpointFrequency = options.BatchCheckpointFrequency;
                 _logger = logger;
+                _functionName = functionName;
             }
 
             public Task CloseAsync(EventProcessorHostPartition context, ProcessingStoppedReason reason)
@@ -153,6 +159,7 @@ namespace Microsoft.Azure.WebJobs.EventHubs.Listeners
                     ProcessorPartition = context
                 };
 
+                Activity.Current?.SetDisplayName(_functionName);
                 if (_singleDispatch)
                 {
                     // Single dispatch
