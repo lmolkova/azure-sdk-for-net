@@ -106,7 +106,7 @@ namespace Azure.Monitor.OpenTelemetry.Exporter
                     continue;
                 }
 
-                if (activityType == PartBType.Unknown || activityType == PartBType.Common)
+                if (activityType == PartBType.Unknown || activityType == PartBType.Common || activityType == PartBType.Azure)
                 {
                     activityType = tempActivityType;
                 }
