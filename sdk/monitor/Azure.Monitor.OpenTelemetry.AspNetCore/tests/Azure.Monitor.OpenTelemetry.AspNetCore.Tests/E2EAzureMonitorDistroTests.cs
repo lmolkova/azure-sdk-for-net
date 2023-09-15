@@ -15,10 +15,13 @@ using System.IO;
 using System.Text.Json;
 using System.Collections.Generic;
 using System.Linq;
+using OpenTelemetry.Trace;
+using OpenTelemetry;
+using System.Diagnostics;
 
 namespace Azure.Monitor.OpenTelemetry.AspNetCore.Tests
 {
-    public class E2EAzureMonitorDistroTests
+    public partial class E2EAzureMonitorDistroTests
     {
         [Fact]
         public async Task ValidateTelemetryExport()
@@ -54,7 +57,7 @@ namespace Azure.Monitor.OpenTelemetry.AspNetCore.Tests
             // Telemetry is serialized as json, and then byte encoded.
             // Need to parse the request content into something assertable.
             var data = ParseJsonRequestContent<ParsedData>(transport.Requests);
-            Assert.Equal(15, data.Count); // Total telemetry items
+            Assert.Equal(14, data.Count); // Total telemetry items
 
             // Group all parsed telemetry by name and get the count per name.
             var summary = data.GroupBy(x => x.name).ToDictionary(x => x.Key!, x => x.Count());
@@ -66,6 +69,45 @@ namespace Azure.Monitor.OpenTelemetry.AspNetCore.Tests
             Assert.Equal(1, summary["Request"]);
 
             // TODO: This test needs to assert telemetry content. (ie: sample rate)
+        }
+
+        [Fact]
+        public async Task HttpChecks()
+        {
+            var builder = WebApplication.CreateBuilder();
+            builder.Logging.ClearProviders();
+            builder.Services.AddOpenTelemetry()
+                .UseAzureMonitor(o =>
+            {
+                o.ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000000";
+            });
+
+            var testProcessor = new TestProcessor();
+            builder.Services.ConfigureOpenTelemetryTracerProvider((sp, builder) => builder.AddProcessor(testProcessor));
+
+            // not visible - check
+            /*builder.Services.Configure<HttpClientInstrumentationOptions>(options => options.RecordException = true);*/
+
+            var app = builder.Build();
+            app.MapGet("/", () => "Hello");
+
+            _ = app.RunAsync("http://localhost:9999");
+
+            // Send request
+            using var httpClient = new HttpClient();
+            var res = await httpClient.GetStringAsync("http://localhost:9999").ConfigureAwait(false);
+            Assert.NotNull(res);
+
+            Assert.True(testProcessor.ProcessedActivities.Count > 0);
+            var dependencies = testProcessor.ProcessedActivities.Where(a => a.Kind == ActivityKind.Client);
+
+            Assert.Single(testProcessor.ProcessedActivities.Where(a => a.Kind == ActivityKind.Server));
+            Assert.Single(dependencies);
+
+            var http = dependencies.Single();
+            Assert.Equal("HTTP GET", http.DisplayName);
+            Assert.Equal("localhost", http.TagObjects.Single(t => t.Key == "net.peer.name").Value);
+            Assert.Equal(9999, http.TagObjects.Single(t => t.Key == "net.peer.port").Value);
         }
 
         private void WaitForRequest(MockTransport transport)
