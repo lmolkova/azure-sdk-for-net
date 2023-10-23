@@ -71,6 +71,35 @@ namespace Azure.Core.Pipeline
             _activityAdapter?.AddTag(name, value);
         }
 
+        public void AddIntegerAttribute(string name, int? value)
+        {
+            if (value.HasValue)
+            {
+                _activityAdapter?.AddTag(name, value.Value);
+            }
+        }
+
+        public void AddLongAttribute(string name, long value)
+        {
+            _activityAdapter?.AddTag(name, value);
+        }
+
+        public void AddDoubleAttribute(string name, double? value)
+        {
+            if (value.HasValue)
+            {
+                _activityAdapter?.AddTag(name, value.Value);
+            }
+        }
+
+        public void AddArrayAttribute<T>(string name, T[]? value)
+        {
+            if (value != null)
+            {
+                _activityAdapter?.AddTag(name, value);
+            }
+        }
+
         public void AddAttribute<T>(string name,
 #if AZURE_NULLABLE
             [AllowNull]
@@ -138,6 +167,11 @@ namespace Azure.Core.Pipeline
         /// <param name="exception">The exception to associate with the failed scope.</param>
         public void Failed(Exception? exception = default)
         {
+            if (exception != null)
+            {
+                AddAttribute("error.type", exception.GetType().FullName);
+            }
+
             _activityAdapter?.MarkFailed(exception);
         }
 

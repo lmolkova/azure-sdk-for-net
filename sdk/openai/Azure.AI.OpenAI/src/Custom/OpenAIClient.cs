@@ -4,6 +4,12 @@
 #nullable disable
 
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using System.Linq;
+using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure.Core;
@@ -23,11 +29,48 @@ namespace Azure.AI.OpenAI
     [CodeGenSuppress("CreateGetEmbeddingsRequest", typeof(string), typeof(RequestContent), typeof(RequestContext))]
     public partial class OpenAIClient
     {
+        private const string UsageTypeAttribute = "openai.usage.type";
+        private const string FinishReasonAttribute = "openai.choice.finish_reason";
+        private const string ModelNameAttribute = "openai.model";
+        private const string ServerAddressAttribute = "server.address";
+        private const string TokenUsageTypePrompt = "prompt";
+        private const string TokenUsageTypeCompletion = "completion";
+
         private const int DefaultMaxCompletionsTokens = 100;
         private const string PublicOpenAIApiVersion = "1";
         private const string PublicOpenAIEndpoint = $"https://api.openai.com/v{PublicOpenAIApiVersion}";
 
         private bool _isConfiguredForAzureOpenAI = true;
+
+        private static readonly Meter s_meter;
+        private static readonly Counter<long> s_chatCompletionsTokens;
+        private static readonly Counter<long> s_chatCompletionsChoices;
+        private static readonly Counter<long> s_completionsTokens;
+        private static readonly Counter<long> s_completionsChoices;
+        private static readonly Counter<long> s_embeddingsTokens;
+        private static readonly Counter<long> s_embeddingsDataCount;
+        private static readonly Histogram<double> s_chatCompletionsDuration;
+        private static readonly Histogram<double> s_completionsDuration;
+        private static readonly Histogram<double> s_embeddingsDuration;
+        private static readonly Histogram<double> s_imageGenerationsDuration;
+
+        static OpenAIClient()
+        {
+            s_meter = new Meter("Azure.AI.OpenAI");
+            s_chatCompletionsTokens = s_meter.CreateCounter<long>("openai.chat_completions.tokens", "{token}", "Number of tokens used");
+            s_chatCompletionsChoices = s_meter.CreateCounter<long>("openai.chat_completions.choices", "{choice}", "Number of choices returned");
+            s_chatCompletionsDuration = s_meter.CreateHistogram<double>("openai.chat_completions.duration", "seconds", "duration of the getchatcompletions call");
+
+            s_completionsTokens = s_meter.CreateCounter<long>("openai.completions.tokens", "{token}", "Number of tokens used");
+            s_completionsChoices = s_meter.CreateCounter<long>("openai.completions.choices", "{choice}", "Number of choices returned");
+            s_completionsDuration = s_meter.CreateHistogram<double>("openai.completions.duration", "seconds", "duration of the getcompletions call");
+
+            s_embeddingsTokens = s_meter.CreateCounter<long>("openai.embeddings.tokens", "{token}", "Number of tokens used");
+            s_embeddingsDataCount = s_meter.CreateCounter<long>("openai.embeddings.vector_size", "{element}", "Number of vector elements returned");
+            s_embeddingsDuration = s_meter.CreateHistogram<double>("openai.embeddings.duration", "seconds", "duration of the getembeddings call");
+
+            s_imageGenerationsDuration = s_meter.CreateHistogram<double>("openai.image_generations.duration", "seconds", "duration of the getimagegenerations call");
+        }
 
         /// <summary>
         ///     Initializes a instance of OpenAIClient for use with an Azure OpenAI resource.
@@ -155,9 +198,12 @@ namespace Azure.AI.OpenAI
         {
             Argument.AssertNotNull(deploymentOrModelName, nameof(deploymentOrModelName));
             Argument.AssertNotNull(completionsOptions, nameof(completionsOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetCompletions");
             scope.Start();
+            EnrichDiagnosticScope(scope, deploymentOrModelName, completionsOptions);
+            TagList tags = CommonMetricsTags(deploymentOrModelName);
 
             completionsOptions.InternalNonAzureModelName = _isConfiguredForAzureOpenAI ? null : deploymentOrModelName;
             completionsOptions.InternalShouldStreamResponse = null;
@@ -169,10 +215,13 @@ namespace Azure.AI.OpenAI
             {
                 using HttpMessage message = CreatePostRequestMessage(deploymentOrModelName, "completions", content, context);
                 Response response = _pipeline.ProcessMessage(message, context, cancellationToken);
-                return Response.FromValue(Completions.FromResponse(response), response);
+                var completions = Completions.FromResponse(response);
+                ReportCompletionsTelemetry(scope, completions, tags, stopwatch.Elapsed);
+                return Response.FromValue(completions, response);
             }
             catch (Exception e)
             {
+                ReportError(s_completionsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -197,9 +246,12 @@ namespace Azure.AI.OpenAI
         {
             Argument.AssertNotNull(deploymentOrModelName, nameof(deploymentOrModelName));
             Argument.AssertNotNull(completionsOptions, nameof(completionsOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetCompletions");
             scope.Start();
+            EnrichDiagnosticScope(scope, deploymentOrModelName, completionsOptions);
+            TagList tags = CommonMetricsTags(deploymentOrModelName);
 
             completionsOptions.InternalNonAzureModelName = _isConfiguredForAzureOpenAI ? null : deploymentOrModelName;
             completionsOptions.InternalShouldStreamResponse = null;
@@ -212,10 +264,13 @@ namespace Azure.AI.OpenAI
                 using HttpMessage message = CreatePostRequestMessage(deploymentOrModelName, "completions", content, context);
                 Response response = await _pipeline.ProcessMessageAsync(message, context, cancellationToken)
                     .ConfigureAwait(false);
-                return Response.FromValue(Completions.FromResponse(response), response);
+                var completions = Completions.FromResponse(response);
+                ReportCompletionsTelemetry(scope, completions, tags, stopwatch.Elapsed);
+                return Response.FromValue(completions, response);
             }
             catch (Exception e)
             {
+                ReportError(s_completionsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -343,9 +398,12 @@ namespace Azure.AI.OpenAI
         {
             Argument.AssertNotNull(deploymentOrModelName, nameof(deploymentOrModelName));
             Argument.AssertNotNull(chatCompletionsOptions, nameof(chatCompletionsOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetChatCompletions");
             scope.Start();
+            EnrichDiagnosticScope(scope, deploymentOrModelName, chatCompletionsOptions);
+            TagList tags = CommonMetricsTags(deploymentOrModelName);
 
             chatCompletionsOptions.InternalNonAzureModelName = _isConfiguredForAzureOpenAI ? null : deploymentOrModelName;
             chatCompletionsOptions.InternalShouldStreamResponse = null;
@@ -363,10 +421,14 @@ namespace Azure.AI.OpenAI
                     content,
                     context);
                 Response response = _pipeline.ProcessMessage(message, context, cancellationToken);
-                return Response.FromValue(ChatCompletions.FromResponse(response), response);
+                var completions = ChatCompletions.FromResponse(response);
+
+                ReportChatCompletionsTelemetry(scope, completions, tags, stopwatch.Elapsed);
+                return Response.FromValue(completions, response);
             }
             catch (Exception e)
             {
+                ReportError(s_chatCompletionsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -380,9 +442,12 @@ namespace Azure.AI.OpenAI
         {
             Argument.AssertNotNull(deploymentOrModelName, nameof(deploymentOrModelName));
             Argument.AssertNotNull(chatCompletionsOptions, nameof(chatCompletionsOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetChatCompletions");
             scope.Start();
+            EnrichDiagnosticScope(scope, deploymentOrModelName, chatCompletionsOptions);
+            TagList tags = CommonMetricsTags(deploymentOrModelName);
 
             chatCompletionsOptions.InternalNonAzureModelName = _isConfiguredForAzureOpenAI ? null : deploymentOrModelName;
             chatCompletionsOptions.InternalShouldStreamResponse = null;
@@ -401,10 +466,13 @@ namespace Azure.AI.OpenAI
                     context);
                 Response response = await _pipeline.ProcessMessageAsync(message, context, cancellationToken)
                     .ConfigureAwait(false);
-                return Response.FromValue(ChatCompletions.FromResponse(response), response);
+                var completions = ChatCompletions.FromResponse(response);
+                ReportChatCompletionsTelemetry(scope, completions, tags, stopwatch.Elapsed);
+                return Response.FromValue(completions, response);
             }
             catch (Exception e)
             {
+                ReportError(s_chatCompletionsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -531,9 +599,12 @@ namespace Azure.AI.OpenAI
         {
             Argument.AssertNotNullOrEmpty(deploymentOrModelName, nameof(deploymentOrModelName));
             Argument.AssertNotNull(embeddingsOptions, nameof(embeddingsOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetEmbeddings");
             scope.Start();
+            EnrichDiagnosticScope(scope, deploymentOrModelName, embeddingsOptions);
+            TagList tags = CommonMetricsTags(deploymentOrModelName);
 
             embeddingsOptions.InternalNonAzureModelName = _isConfiguredForAzureOpenAI ? null : deploymentOrModelName;
 
@@ -544,10 +615,14 @@ namespace Azure.AI.OpenAI
             {
                 HttpMessage message = CreatePostRequestMessage(deploymentOrModelName, "embeddings", content, context);
                 Response response = _pipeline.ProcessMessage(message, context, cancellationToken);
-                return Response.FromValue(Embeddings.FromResponse(response), response);
+
+                var embeddings = Embeddings.FromResponse(response);
+                ReportEmbeddingsMetrics(scope, embeddings, tags, stopwatch.Elapsed);
+                return Response.FromValue(embeddings, response);
             }
             catch (Exception e)
             {
+                ReportError(s_embeddingsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -561,9 +636,12 @@ namespace Azure.AI.OpenAI
         {
             Argument.AssertNotNullOrEmpty(deploymentOrModelName, nameof(deploymentOrModelName));
             Argument.AssertNotNull(embeddingsOptions, nameof(embeddingsOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetEmbeddings");
             scope.Start();
+            EnrichDiagnosticScope(scope, deploymentOrModelName, embeddingsOptions);
+            TagList tags = CommonMetricsTags(deploymentOrModelName);
 
             embeddingsOptions.InternalNonAzureModelName = _isConfiguredForAzureOpenAI ? null : deploymentOrModelName;
 
@@ -575,10 +653,14 @@ namespace Azure.AI.OpenAI
                 HttpMessage message = CreatePostRequestMessage(deploymentOrModelName, "embeddings", content, context);
                 Response response = await _pipeline.ProcessMessageAsync(message, context, cancellationToken)
                     .ConfigureAwait(false);
-                return Response.FromValue(Embeddings.FromResponse(response), response);
+
+                var embeddings = Embeddings.FromResponse(response);
+                ReportEmbeddingsMetrics(scope, embeddings, tags, stopwatch.Elapsed);
+                return Response.FromValue(embeddings, response);
             }
             catch (Exception e)
             {
+                ReportError(s_embeddingsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -602,9 +684,12 @@ namespace Azure.AI.OpenAI
             CancellationToken cancellationToken = default)
         {
             Argument.AssertNotNull(imageGenerationOptions, nameof(imageGenerationOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetImageGenerations");
             scope.Start();
+            EnrichDiagnosticScope(scope, imageGenerationOptions);
+            TagList tags = CommonMetricsTags(string.Empty);
 
             try
             {
@@ -633,12 +718,16 @@ namespace Azure.AI.OpenAI
                         content: imageGenerationOptions.ToRequestContent(),
                         context);
                     rawResponse = _pipeline.ProcessMessage(message, context, cancellationToken);
+
                     responseValue = ImageGenerations.FromResponse(rawResponse);
                 }
+
+                ReportImageGenerationMetrics(scope, responseValue, tags, stopwatch.Elapsed);
                 return Response.FromValue(responseValue, rawResponse);
             }
             catch (Exception e)
             {
+                ReportError(s_imageGenerationsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -662,9 +751,12 @@ namespace Azure.AI.OpenAI
             CancellationToken cancellationToken = default)
         {
             Argument.AssertNotNull(imageGenerationOptions, nameof(imageGenerationOptions));
+            Stopwatch stopwatch = Stopwatch.StartNew();
 
             using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetImageGenerations");
             scope.Start();
+            EnrichDiagnosticScope(scope, imageGenerationOptions);
+            TagList tags = CommonMetricsTags(string.Empty);
 
             try
             {
@@ -697,10 +789,12 @@ namespace Azure.AI.OpenAI
                         .ConfigureAwait(false);
                     responseValue = ImageGenerations.FromResponse(rawResponse);
                 }
+                ReportImageGenerationMetrics(scope, responseValue, tags, stopwatch.Elapsed);
                 return Response.FromValue(responseValue, rawResponse);
             }
             catch (Exception e)
             {
+                ReportError(s_imageGenerationsDuration, tags, stopwatch.Elapsed, e);
                 scope.Failed(e);
                 throw;
             }
@@ -763,5 +857,214 @@ namespace Azure.AI.OpenAI
             => chatCompletionsOptions.AzureExtensionsOptions != null
                 ? "extensions/chat/completions"
                 : "chat/completions";
+
+#nullable enable
+
+        private TagList CommonMetricsTags(string model)
+        {
+            TagList tags = default;
+            tags.Add(ModelNameAttribute, model);
+            tags.Add(ServerAddressAttribute, _endpoint.Host);
+            return tags;
+        }
+
+        private void ReportChatCompletionsTelemetry(DiagnosticScope scope, ChatCompletions completions, TagList tags, TimeSpan duration)
+        {
+            if (scope.IsEnabled)
+            {
+                var filterResults = completions.PromptFilterResults.Select(PromptFilterResultsToString);
+                if (filterResults.Any())
+                {
+                    scope.AddArrayAttribute("openai.azure.chat_completions.response.filter_results", filterResults.ToArray());
+                }
+
+                var finishReasons = completions.Choices.Select(c => c.FinishReason.ToString()).ToArray();
+                scope.AddAttribute("openai.chat_completions.response.id", completions.Id);
+                AddCreatedAttribute(scope, "openai.chat_completions.response.created_at", completions.Created);
+                scope.AddIntegerAttribute("openai.usage.prompt_tokens", completions.Usage.PromptTokens);
+                scope.AddIntegerAttribute("openai.usage.completion_tokens", completions.Usage.CompletionTokens);
+                scope.AddArrayAttribute("openai.choices.finish_reasons", finishReasons);
+            }
+
+            // before tags are modified
+            s_chatCompletionsDuration.Record(duration.TotalSeconds, tags);
+            ReportChoicesCounter(s_chatCompletionsChoices, completions.Choices.Select(c => c.FinishReason), tags);
+
+            if (completions.Usage.PromptTokens != 0)
+            {
+                var promptTags = CopyTags(tags);
+                promptTags.Add(UsageTypeAttribute, TokenUsageTypePrompt);
+                s_chatCompletionsTokens.Add(completions.Usage.PromptTokens, promptTags);
+            }
+
+            if (completions.Usage.CompletionTokens != 0)
+            {
+                var completionsTags = tags;
+                completionsTags.Add(UsageTypeAttribute, TokenUsageTypeCompletion);
+                s_chatCompletionsTokens.Add(completions.Usage.CompletionTokens, completionsTags);
+            }
+        }
+
+        private void ReportCompletionsTelemetry(DiagnosticScope scope, Completions completions, TagList tags, TimeSpan duration)
+        {
+            if (scope.IsEnabled)
+            {
+                var filterResults = completions.PromptFilterResults.Select(PromptFilterResultsToString);
+                if (filterResults.Any())
+                {
+                    scope.AddArrayAttribute("openai.azure.completions.response.filter_results", filterResults.ToArray());
+                }
+
+                var finishReasons = completions.Choices.Select(c => c.FinishReason.ToString()).ToArray();
+                scope.AddAttribute("openai.completions.response.id", completions.Id);
+                AddCreatedAttribute(scope, "openai.completions.response.created_at", completions.Created);
+                scope.AddArrayAttribute("openai.completions.response.finish_reasons", finishReasons);
+            }
+
+            // before tags are modified
+            s_completionsDuration.Record(duration.TotalSeconds, tags);
+            ReportChoicesCounter(s_completionsChoices, completions.Choices.Select(c => c.FinishReason), tags);
+
+            if (completions.Usage.PromptTokens != 0)
+            {
+                var promptTags = CopyTags(tags);
+                promptTags.Add(UsageTypeAttribute, "prompt");
+                s_completionsTokens.Add(completions.Usage.PromptTokens, promptTags);
+            }
+
+            if (completions.Usage.CompletionTokens != 0)
+            {
+                var completionsTags = tags;
+                completionsTags.Add(UsageTypeAttribute, "completion");
+                s_completionsTokens.Add(completions.Usage.CompletionTokens, completionsTags);
+            }
+        }
+
+        private void ReportEmbeddingsMetrics(DiagnosticScope scope, Embeddings embeddings, TagList tags, TimeSpan duration)
+        {
+            scope.AddIntegerAttribute("openai.embeddings.response.vector_size", embeddings.Data.Count);
+            s_embeddingsDataCount.Add(embeddings.Data.Count, tags);
+            s_embeddingsDuration.Record(duration.TotalSeconds, tags);
+
+            // tags are updated, so has to be the last one
+            if (embeddings.Usage.PromptTokens != 0)
+            {
+                scope.AddIntegerAttribute("openai.embeddings.response.prompt_tokens", embeddings.Usage.PromptTokens);
+                tags.Add(UsageTypeAttribute, "prompt");
+                s_embeddingsTokens.Add(embeddings.Usage.PromptTokens, tags);
+            }
+        }
+
+        private void ReportImageGenerationMetrics(DiagnosticScope scope, ImageGenerations generations, TagList tags, TimeSpan duration)
+        {
+            AddCreatedAttribute(scope, "openai.image_generations.response.created_at", generations.Created);
+            s_imageGenerationsDuration.Record(duration.TotalSeconds, tags);
+        }
+
+        private void ReportError(Histogram<double> metric, TagList tags, TimeSpan duration, Exception e)
+        {
+            tags.Add("error.type", e.GetType().Name);
+            metric.Record(duration.TotalSeconds, tags);
+        }
+
+        private void EnrichDiagnosticScope(DiagnosticScope scope, string model, CompletionsOptions options)
+        {
+            scope.AddAttribute(ModelNameAttribute, model);
+            scope.AddAttribute(ServerAddressAttribute, _endpoint.Host);
+
+            scope.AddDoubleAttribute("openai.completions.request.temperature", options.Temperature);
+            scope.AddIntegerAttribute("openai.completions.request.max_tokens", options.MaxTokens);
+            scope.AddDoubleAttribute("openai.completions.request.top_p", options.NucleusSamplingFactor);
+            scope.AddDoubleAttribute("openai.completions.request.presence_penalty", options.PresencePenalty);
+            scope.AddDoubleAttribute("openai.completions.request.frequency_penalty", options.FrequencyPenalty);
+        }
+
+        private void EnrichDiagnosticScope(DiagnosticScope scope, string model, ChatCompletionsOptions options)
+        {
+            scope.AddAttribute(ModelNameAttribute, model);
+            scope.AddAttribute(ServerAddressAttribute, _endpoint.Host);
+
+            scope.AddDoubleAttribute("openai.chat_completions.request.temperature", options.Temperature);
+            scope.AddIntegerAttribute("openai.chat_completions.request.max_tokens", options.MaxTokens);
+            scope.AddDoubleAttribute("openai.chat_completions.request.top_p", options.NucleusSamplingFactor);
+            scope.AddDoubleAttribute("openai.chat_completions.request.presence_penalty", options.PresencePenalty);
+            scope.AddDoubleAttribute("openai.chat_completions.request.frequency_penalty", options.FrequencyPenalty);
+        }
+
+        private void EnrichDiagnosticScope(DiagnosticScope scope, string model, EmbeddingsOptions options)
+        {
+            scope.AddAttribute(ModelNameAttribute, model);
+            scope.AddAttribute(ServerAddressAttribute, _endpoint.Host);
+            scope.AddIntegerAttribute("openai.embeddings.request.input_size", options.Input.Count);
+        }
+
+        private void EnrichDiagnosticScope(DiagnosticScope scope, ImageGenerationOptions options)
+        {
+            scope.AddIntegerAttribute("openai.image_generations.request.image_count", options.ImageCount);
+            scope.AddAttribute("openai.image_generations.request.image_size", options.Size);
+            scope.AddAttribute("openai.image_generations.request.image_format", options.ResponseFormat);
+        }
+
+        private static void AddCreatedAttribute(DiagnosticScope scope, string name, DateTimeOffset created)
+        {
+            if (scope.IsEnabled)
+            {
+                scope.AddLongAttribute(name, created.ToUnixTimeMilliseconds());
+            }
+        }
+
+        private static string? PromptFilterResultsToString(PromptFilterResult promptFilterResult)
+        {
+            var results = promptFilterResult.ContentFilterResults;
+            StringBuilder val = new();
+
+            if (results.Sexual.Filtered)
+            {
+                val.Append("sexual").Append(", ");
+            }
+            if (results.Violence.Filtered)
+            {
+                val.Append("violence").Append(", ");
+            }
+            if (results.Hate.Filtered)
+            {
+                val.Append("hate").Append(", ");
+            }
+            if (results.SelfHarm.Filtered)
+            {
+                val.Append("self_harm").Append(", ");
+            }
+
+            if (val.Length > 0)
+            {
+                val.Remove(val.Length - 2, 2);
+                return $"[{promptFilterResult.PromptIndex}]: {val}";
+            }
+
+            return null;
+        }
+
+        private static TagList CopyTags(TagList tags)
+        {
+            var copy = new KeyValuePair<string, object?>[tags.Count];
+            tags.CopyTo(copy);
+
+            return new TagList(copy);
+        }
+
+        private void ReportChoicesCounter(Counter<long> metric, IEnumerable<CompletionsFinishReason?> reasons, TagList tags)
+        {
+            // TODO optimize
+            foreach (var reason in reasons)
+            {
+                var tagsWithFinishReason = tags;
+                if (reason != null)
+                {
+                    tagsWithFinishReason = CopyTags(tags);
+                    tagsWithFinishReason.Add(FinishReasonAttribute, reason.ToString());
+                }
+                metric.Add(1, tagsWithFinishReason);
+            }
+        }
     }
 }
