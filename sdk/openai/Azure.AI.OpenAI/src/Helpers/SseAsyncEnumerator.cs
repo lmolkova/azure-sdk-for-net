@@ -7,6 +7,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
+using Azure.AI.OpenAI.Custom.Internal;
 
 namespace Azure.Core.Sse
 {
@@ -15,6 +16,7 @@ namespace Azure.Core.Sse
         internal static async IAsyncEnumerable<T> EnumerateFromSseStream(
             Stream stream,
             Func<JsonElement, IEnumerable<T>> multiElementDeserializer,
+            StreamingScope<T> scope,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             try
@@ -22,7 +24,17 @@ namespace Azure.Core.Sse
                 using SseReader sseReader = new(stream);
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    SseLine? sseEvent = await sseReader.TryReadSingleFieldEventAsync().ConfigureAwait(false);
+                    SseLine? sseEvent = null;
+                    try
+                    {
+                        sseEvent = await sseReader.TryReadSingleFieldEventAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        scope?.RecordException(ex);
+                        throw;
+                    }
+
                     if (sseEvent is not null)
                     {
                         ReadOnlyMemory<char> name = sseEvent.Value.FieldName;
@@ -39,6 +51,7 @@ namespace Azure.Core.Sse
                         IEnumerable<T> newItems = multiElementDeserializer.Invoke(sseMessageJson.RootElement);
                         foreach (T item in newItems)
                         {
+                            scope?.RecordChunk(item);
                             yield return item;
                         }
                     }
@@ -48,16 +61,23 @@ namespace Azure.Core.Sse
             {
                 // Always dispose the stream immediately once enumeration is complete for any reason
                 stream.Dispose();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    scope.RecordCancellation();
+                }
+                scope?.Dispose();
             }
         }
 
         internal static IAsyncEnumerable<T> EnumerateFromSseStream(
             Stream stream,
             Func<JsonElement, T> elementDeserializer,
+            StreamingScope<T> scope,
             CancellationToken cancellationToken = default)
             => EnumerateFromSseStream(
                 stream,
                 (element) => new T[] { elementDeserializer.Invoke(element) },
+                scope,
                 cancellationToken);
     }
 }

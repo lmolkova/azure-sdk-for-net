@@ -4,9 +4,11 @@
 #nullable disable
 
 using System;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
+using Azure.AI.OpenAI.Custom.Internal;
 using Azure.Core;
 using Azure.Core.Pipeline;
 using Azure.Core.Sse;
@@ -22,6 +24,7 @@ public partial class OpenAIClient
     private const string PublicOpenAIEndpoint = $"https://api.openai.com/v{PublicOpenAIApiVersion}";
 
     private bool _isConfiguredForAzureOpenAI = true;
+    private readonly OpenAIDiagnostics _openAIDiagnostics;
 
     /// <summary>
     ///     Initializes a instance of OpenAIClient for use with an Azure OpenAI resource.
@@ -52,6 +55,7 @@ public partial class OpenAIClient
         _pipeline = HttpPipelineBuilder.Build(options, Array.Empty<HttpPipelinePolicy>(), new HttpPipelinePolicy[] { new AzureKeyCredentialPolicy(_keyCredential, AuthorizationHeader) }, new ResponseClassifier());
         _endpoint = endpoint;
         _apiVersion = options.Version;
+        _openAIDiagnostics = new OpenAIDiagnostics(endpoint, ClientDiagnostics);
     }
 
     /// <inheritdoc cref="OpenAIClient(Uri, AzureKeyCredential, OpenAIClientOptions)"/>
@@ -148,8 +152,7 @@ public partial class OpenAIClient
         Argument.AssertNotNull(completionsOptions, nameof(completionsOptions));
         Argument.AssertNotNullOrEmpty(completionsOptions.DeploymentName, nameof(completionsOptions.DeploymentName));
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetCompletions");
-        scope.Start();
+        using InstrumentationScope scope = _openAIDiagnostics.StartCompletionsScope(completionsOptions);
 
         completionsOptions.InternalShouldStreamResponse = null;
 
@@ -160,11 +163,13 @@ public partial class OpenAIClient
         {
             using HttpMessage message = CreatePostRequestMessage(completionsOptions, content, context);
             Response response = _pipeline.ProcessMessage(message, context, cancellationToken);
-            return Response.FromValue(Completions.FromResponse(response), response);
+            Completions completions = Completions.FromResponse(response);
+            scope.RecordCompletions(completions);
+            return Response.FromValue(completions, response);
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e, false);
             throw;
         }
     }
@@ -187,9 +192,7 @@ public partial class OpenAIClient
         Argument.AssertNotNull(completionsOptions, nameof(completionsOptions));
         Argument.AssertNotNullOrEmpty(completionsOptions.DeploymentName, nameof(completionsOptions.DeploymentName));
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetCompletions");
-        scope.Start();
-
+        using InstrumentationScope scope = _openAIDiagnostics.StartCompletionsScope(completionsOptions);
         completionsOptions.InternalShouldStreamResponse = null;
 
         RequestContent content = completionsOptions.ToRequestContent();
@@ -200,11 +203,13 @@ public partial class OpenAIClient
             using HttpMessage message = CreatePostRequestMessage(completionsOptions, content, context);
             Response response = await _pipeline.ProcessMessageAsync(message, context, cancellationToken)
                 .ConfigureAwait(false);
-            return Response.FromValue(Completions.FromResponse(response), response);
+            Completions completions = Completions.FromResponse(response);
+            scope.RecordCompletions(completions);
+            return Response.FromValue(completions, response);
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e, false);
             throw;
         }
     }
@@ -234,9 +239,7 @@ public partial class OpenAIClient
         Argument.AssertNotNull(completionsOptions, nameof(completionsOptions));
         Argument.AssertNotNullOrEmpty(completionsOptions.DeploymentName, nameof(completionsOptions.DeploymentName));
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetCompletionsStreaming");
-        scope.Start();
-
+        StreamingScope<Completions> scope = _openAIDiagnostics.StartCompletionsStreamingScope(completionsOptions);
         completionsOptions.InternalShouldStreamResponse = true;
 
         RequestContent content = completionsOptions.ToRequestContent();
@@ -253,11 +256,12 @@ public partial class OpenAIClient
                 (responseForEnumeration) => SseAsyncEnumerator<Completions>.EnumerateFromSseStream(
                     responseForEnumeration.ContentStream,
                     e => Completions.DeserializeCompletions(e),
+                    scope,
                     cancellationToken));
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e);
             throw;
         }
     }
@@ -289,9 +293,7 @@ public partial class OpenAIClient
 
         completionsOptions.InternalShouldStreamResponse = true;
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetCompletionsStreaming");
-        scope.Start();
-
+        StreamingScope<Completions> scope = _openAIDiagnostics.StartCompletionsStreamingScope(completionsOptions);
         RequestContent content = completionsOptions.ToRequestContent();
         RequestContext context = FromCancellationToken(cancellationToken);
 
@@ -307,11 +309,12 @@ public partial class OpenAIClient
                 (responseForEnumeration) => SseAsyncEnumerator<Completions>.EnumerateFromSseStream(
                     responseForEnumeration.ContentStream,
                     e => Completions.DeserializeCompletions(e),
+                    scope,
                     cancellationToken));
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e);
             throw;
         }
     }
@@ -332,8 +335,7 @@ public partial class OpenAIClient
         Argument.AssertNotNull(chatCompletionsOptions, nameof(chatCompletionsOptions));
         Argument.AssertNotNullOrEmpty(chatCompletionsOptions.DeploymentName, nameof(chatCompletionsOptions.DeploymentName));
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetChatCompletions");
-        scope.Start();
+        using InstrumentationScope scope = _openAIDiagnostics.StartChatCompletionsScope(chatCompletionsOptions);
 
         chatCompletionsOptions.InternalShouldStreamResponse = null;
 
@@ -344,11 +346,13 @@ public partial class OpenAIClient
         {
             using HttpMessage message = CreatePostRequestMessage(chatCompletionsOptions, content, context);
             Response response = _pipeline.ProcessMessage(message, context, cancellationToken);
-            return Response.FromValue(ChatCompletions.FromResponse(response), response);
+            ChatCompletions completions = ChatCompletions.FromResponse(response);
+            scope.RecordChatCompletions(completions);
+            return Response.FromValue(completions, response);
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e, false);
             throw;
         }
     }
@@ -369,9 +373,7 @@ public partial class OpenAIClient
         Argument.AssertNotNull(chatCompletionsOptions, nameof(chatCompletionsOptions));
         Argument.AssertNotNullOrEmpty(chatCompletionsOptions.DeploymentName, nameof(chatCompletionsOptions.DeploymentName));
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetChatCompletions");
-        scope.Start();
-
+        using InstrumentationScope scope = _openAIDiagnostics.StartChatCompletionsScope(chatCompletionsOptions);
         chatCompletionsOptions.InternalShouldStreamResponse = null;
 
         RequestContent content = chatCompletionsOptions.ToRequestContent();
@@ -382,11 +384,13 @@ public partial class OpenAIClient
             using HttpMessage message = CreatePostRequestMessage(chatCompletionsOptions, content, context);
             Response response = await _pipeline.ProcessMessageAsync(message, context, cancellationToken)
                 .ConfigureAwait(false);
-            return Response.FromValue(ChatCompletions.FromResponse(response), response);
+            ChatCompletions completions = ChatCompletions.FromResponse(response);
+            scope.RecordChatCompletions(completions);
+            return Response.FromValue(completions, response);
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e, false);
             throw;
         }
     }
@@ -416,8 +420,7 @@ public partial class OpenAIClient
         Argument.AssertNotNull(chatCompletionsOptions, nameof(chatCompletionsOptions));
         Argument.AssertNotNullOrEmpty(chatCompletionsOptions.DeploymentName, nameof(chatCompletionsOptions.DeploymentName));
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetChatCompletionsStreaming");
-        scope.Start();
+        StreamingScope<StreamingChatCompletionsUpdate> scope = _openAIDiagnostics.StartChatCompletionsStreamingScope(chatCompletionsOptions);
 
         chatCompletionsOptions.InternalShouldStreamResponse = true;
 
@@ -436,11 +439,12 @@ public partial class OpenAIClient
                     => SseAsyncEnumerator<StreamingChatCompletionsUpdate>.EnumerateFromSseStream(
                         responseForEnumeration.ContentStream,
                         StreamingChatCompletionsUpdate.DeserializeStreamingChatCompletionsUpdates,
+                        scope,
                         cancellationToken));
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e);
             throw;
         }
     }
@@ -473,9 +477,7 @@ public partial class OpenAIClient
         Argument.AssertNotNull(chatCompletionsOptions, nameof(chatCompletionsOptions));
         Argument.AssertNotNullOrEmpty(chatCompletionsOptions.DeploymentName, nameof(chatCompletionsOptions.DeploymentName));
 
-        using DiagnosticScope scope = ClientDiagnostics.CreateScope("OpenAIClient.GetChatCompletionsStreaming");
-        scope.Start();
-
+        StreamingScope<StreamingChatCompletionsUpdate>  scope = _openAIDiagnostics.StartChatCompletionsStreamingScope(chatCompletionsOptions);
         chatCompletionsOptions.InternalShouldStreamResponse = true;
 
         RequestContent content = chatCompletionsOptions.ToRequestContent();
@@ -496,11 +498,12 @@ public partial class OpenAIClient
                     => SseAsyncEnumerator<StreamingChatCompletionsUpdate>.EnumerateFromSseStream(
                         responseForEnumeration.ContentStream,
                         StreamingChatCompletionsUpdate.DeserializeStreamingChatCompletionsUpdates,
+                        scope,
                         cancellationToken));
         }
         catch (Exception e)
         {
-            scope.Failed(e);
+            scope.RecordException(e);
             throw;
         }
     }

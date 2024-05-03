@@ -53,6 +53,8 @@ namespace Azure.Core.Pipeline
 
         public bool IsEnabled { get; }
 
+        public Activity? Activity => _activityAdapter?.Activity;
+
         public void AddAttribute(string name, string? value)
         {
             if (value != null)
@@ -67,6 +69,11 @@ namespace Azure.Core.Pipeline
         }
 
         public void AddLongAttribute(string name, long value)
+        {
+            _activityAdapter?.AddTag(name, value);
+        }
+
+        public void AddDoubleAttribute(string name, double value)
         {
             _activityAdapter?.AddTag(name, value);
         }
@@ -197,6 +204,8 @@ namespace Azure.Core.Pipeline
                 _kind = kind;
                 _diagnosticSourceArgs = diagnosticSourceArgs;
             }
+
+            public Activity? Activity => _currentActivity;
 
             public void AddTag(string name, object value)
             {
