@@ -6,7 +6,6 @@ using System.Diagnostics;
 using System.Linq;
 using Azure.Core.Pipeline;
 using System.Text.Json;
-using System.Diagnostics.Tracing;
 
 namespace Azure.AI.OpenAI.Custom.Internal
 {
@@ -27,9 +26,6 @@ namespace Azure.AI.OpenAI.Custom.Internal
                     { "event.data", JsonSerializer.Serialize(new { content = sanitizedPrompt }, s_jsonSerializerOptions) },
                     { "gen_ai.system", "openai"}
                 }));
-
-            // failed experiment, Otel .NET logging does not support structured bodies.
-            OpenAIEventSource.Log.RecordPrompt("gen_ai.user.message", "openai", new KeyValuePair<string, string>("content", sanitizedPrompt));
         }
 
         public static void RecordRequestMessage(DiagnosticScope scope, ChatRequestMessage message, bool recordContent)

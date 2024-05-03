@@ -19,7 +19,6 @@ namespace Azure.AI.OpenAI.Custom.Internal
         private static readonly Meter s_meterStreams = new Meter("Azure.AI.OpenAI.Streams");
         private static readonly Counter<long> s_streamStart = s_meterStreams.CreateCounter<long>("gen_ai.stream.start", "{stream}", "GenAI streams started.");
         private static readonly Counter<long> s_streamComplete = s_meterStreams.CreateCounter<long>("gen_ai.stream.end", "{stream}", "GenAI streams completed.");
-        //private static readonly Counter<long> s_chunks = s_meterStreams.CreateCounter<long>("gen_ai.stream.output.tokens", "{token}", "GenAI streaming chunk count.");
 
         private readonly string _operationName;
         private readonly ChatCompletionsOptions _chatCompletionsOptions;
@@ -262,19 +261,6 @@ namespace Azure.AI.OpenAI.Custom.Internal
                 { "gen_ai.operation.name", _operationName },
             });
         }
-
-        /*public void RecordStreamChunk(string responseModelName)
-        {
-            s_chunks.Add(1, new TagList
-            {
-                { "gen_ai.system", "openai" },
-                { "gen_ai.request.model", DeploymentName },
-                { "gen_ai.response.model", responseModelName },
-                { "server.address", _serverAddress},
-                { "server.port", _serverPort },
-                { "gen_ai.operation.name", _operationName },
-            });
-        }*/
 
         private void RecordResponseAttributes(string responseId, string model, string finishReason, int? promptTokens, int? completionTokens)
         {
